@@ -22,8 +22,7 @@ stty_width=$(stty size|awk '{print $2}')
 container_name="arms_db"
 [[ $stty_width -lt 95 ]] && space_with=$((($stty_width-15))) || space_with=$((($stty_width-35)))
 service_file=$(systemctl show -p FragmentPath docker.service |cut -d "=" -f2)
-socket_file=$(systemctl show -p FragmentPath docker.socket)
-[[ $socket_file == "" ]] && socket_file="./missing_file.socket"
+socket_file=$(systemctl show -p FragmentPath docker.socket |cut -d "=" -f2)
 valid_docker_group_users=(
 "root"
 "sa_arms"
@@ -119,10 +118,21 @@ exit 1
 
 
 # Ensure Container of MongoDB is running
-# ==================================================================================================================
-[[ $(docker ps --format "table {{.Names}}" |grep -w ${container_name}) == "" ]] && \
+# ===================================================================================================================================
+[[ $(docker ps --format "{{.Names}}" |grep -w ${container_name}) == "" ]] && \
 printf '\033[1;31;31m%b\033[0m' "MongoDB Container must be running when you run this script.\n" && \
 exit 1
+
+
+# If socket file is missing, create a new one.
+# ===================================================================================================================================
+if [[ ! -f ${socket_file} ]]; then
+    socket_dir=$(dirname ${service_file})
+    cp ./docker.socket ${socket_dir} 
+    systemctl unmask docker.service && systemctl unmask docker.socket
+    docker stop ${container_name} && systemctl restart docker && docker start ${container_name}
+    socket_file=$(systemctl show -p FragmentPath docker.socket  |cut -d "=" -f2)
+fi
 
 
 # Basic utility functions
@@ -350,7 +360,7 @@ check_item_011() {
 check_item_012() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    icc=$(docker network ls --quiet | xargs xargs docker network inspect --format \
+    icc=$(docker network ls --quiet | xargs xargs docker network inspect -f \
     '{{ .Name }}: {{ .Options }}' | sed "s/ /\n/g"| grep "com.docker.network.bridge.enable_icc:" | \
     cut -d ":" -f 2)
     if [[ $icc == "true" ]]; then
@@ -412,7 +422,7 @@ check_item_016() {
 check_item_017() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    default_ulimit=$(docker info |grep "default-ulimit")
+    default_ulimit=$(ps -ef | grep dockerd |grep "default-ulimit ")
     if [[ $default_ulimit == "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -424,7 +434,7 @@ check_item_017() {
 check_item_018() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    security_options=$(docker info --format '{{ .SecurityOptions }}')
+    security_options=$(docker info -f '{{ .SecurityOptions }}')
     _passed "[$item] ${check_items[$item]}"
 }
 
@@ -445,7 +455,7 @@ check_item_020() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
     storage_opt=$(ps -ef | grep dockerd |grep "storage-opt")
-    if [[ $storage-opt == "" ]]; then
+    if [[ $storage_opt == "" ]]; then
         _passed "[$item] ${check_items[$item]}"
     else
         _failed "[$item] ${check_items[$item]}"
@@ -461,10 +471,10 @@ check_item_021() {
 }
 
 
-check_item_021() {
+check_item_022() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    log_driver=$(docker info --format '{{ .LoggingDriver }}')
+    log_driver=$(docker info -f '{{ .LoggingDriver }}')
     _passed "[$item] ${check_items[$item]}"
 }
 
@@ -484,7 +494,7 @@ check_item_023() {
 check_item_024() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    live_restore=$(docker info --format '{{ .LiveRestoreEnabled }}')
+    live_restore=$(docker info -f '{{ .LiveRestoreEnabled }}')
     if [[ $live_restore != "true" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -532,7 +542,7 @@ check_item_027() {
 check_item_028() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    experimental=$(docker version --format '{{ .Server.Experimental }}')
+    experimental=$(docker version -f '{{ .Server.Experimental }}')
     if [[ $experimental != "false" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -592,7 +602,7 @@ check_item_032() {
 check_item_033() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local docker_dir="etc/docker"
+    local docker_dir="/etc/docker"
     ownership=$(stat -c %U:%G ${docker_dir} | grep -v root:root)
     if [[ $ownership != "" ]]; then
         _failed "[$item] ${check_items[$item]}"
@@ -605,7 +615,7 @@ check_item_033() {
 check_item_034() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local docker_dir="etc/docker"
+    local docker_dir="/etc/docker"
     permissions=$(stat -c %a ${docker_dir})
     if [[ $permissions -ne 755 ]]; then
         _failed "[$item] ${check_items[$item]}"
@@ -730,7 +740,7 @@ check_item_042() {
 check_item_043() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local container_user=$(docker inspect --format '{{ .Id }}:{{ .Config.User }}' ${container_name} |cut -d ":" -f2)
+    local container_user=$(docker inspect -f '{{ .Config.User }}' ${container_name})
     if [[ $container_user == "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -754,8 +764,7 @@ check_item_044() {
 check_item_045() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local privileged_info=$(docker inspect --format '{{ .Id }}: Privileged={{ .HostConfig.Privileged }}' ${container_name})
-    local check_res=$(echo ${privileged_info |awk -F'=' '{print $NF}'})
+    local check_res=$(docker inspect -f '{{ .HostConfig.Privileged }}' ${container_name})
     if [[ $check_res != "false" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -767,8 +776,7 @@ check_item_045() {
 check_item_046() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local pind_info=$(docker inspect --format '{{ .Id }}: Volumes={{ .Mounts }}' ${container_name})
-    local pinds=$(echo ${pind_info} |sed  's/ /\n/g' |xargs -i echo {} |grep "Source:" |cut -d ":" -f2)
+    local pinds=$(docker inspect --format '{{range .HostConfig.Binds}}{{println .}}{{end}}' $container_name |cut -d ':' -f1)
     local check_num=0
     local invalid_dirs=""
     for dir in ${pinds[@]}; do
@@ -790,8 +798,14 @@ check_item_046() {
 check_item_047() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local port=$(docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{4,5}" |cut -d ':' -f2)
-    if [[ $port -lt 1024 ]]; then
+    local ports=$(docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{1,5}" |cut -d ':' -f2)
+    check_num=0
+    for port in ${ports[@]}; do
+    	if [[ $port -lt 1024 ]]; then
+    		check_num=$((($check_num +1 )))
+    	fi
+    done
+    if [[ $check_num -ne 0 ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
         _passed "[$item] ${check_items[$item]}"
@@ -802,7 +816,7 @@ check_item_047() {
 check_item_048() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local net=$(docker inspect --format '{{ .Id }}: NetworkMode={{ .HostConfig.NetworkMode }}' ${container_name} |cut -d '=' -f2)
+    local net=$(docker inspect -f '{{ .HostConfig.NetworkMode }}' ${container_name} |cut -d '=' -f2)
     if [[ $net == "host" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -814,7 +828,7 @@ check_item_048() {
 check_item_049() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local mem=$(docker inspect --format '{{ .Id }}: Memory={{ .HostConfig.Memory }}' ${container_name} |cut -d '=' -f2)
+    local mem=$(docker inspect -f '{{ .Id }}: Memory={{.HostConfig.Memory}}' ${container_name} |cut -d '=' -f2)
     if [[ $mem == "0" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -826,8 +840,8 @@ check_item_049() {
 check_item_050() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local cpu_share=$(docker inspect --format '{{ .Id }}: CpuShares={{ .HostConfig.CpuShares }}' ${container_name} |cut -d '=' -f2)
-    if [[ $cpu_share == "0" || $cpu_share== "1024" ]]; then
+    local cpu_share=$(docker inspect -f '{{.HostConfig.CpuShares}}' ${container_name} |cut -d '=' -f2)
+    if [[ $cpu_share == "0" || $cpu_share == "1024" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
         _passed "[$item] ${check_items[$item]}"
@@ -838,7 +852,7 @@ check_item_050() {
 check_item_051() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local host_ip=$(docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2)
+    local host_ip=$(docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2)
     if [[ $host_ip == "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -850,8 +864,8 @@ check_item_051() {
 check_item_052() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local restart_policy_name=$(docker inspect --format '{{ .HostConfig.RestartPolicy.Name }}' ${container_name})
-    local restart_max_count=$(docker inspect --format '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name})
+    local restart_policy_name=$(docker inspect -f '{{ .HostConfig.RestartPolicy.Name }}' ${container_name})
+    local restart_max_count=$(docker inspect -f '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name})
     if [[ $restart_policy_name != "on-failure" || $restart_max_count -ne 5 ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -863,7 +877,7 @@ check_item_052() {
 check_item_053() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local pid_mod=$(docker inspect --format '{{ .HostConfig.PidMode }}' ${container_name})
+    local pid_mod=$(docker inspect -f '{{ .HostConfig.PidMode }}' ${container_name})
     if [[ $pid_mod == "host" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -875,7 +889,7 @@ check_item_053() {
 check_item_054() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local ipc_mod=$(docker inspect --format '{{ .HostConfig.IpcMode  }}' ${container_name})
+    local ipc_mod=$(docker inspect -f '{{ .HostConfig.IpcMode  }}' ${container_name})
     if [[ $ipc_mod == "host" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -887,7 +901,7 @@ check_item_054() {
 check_item_055() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local devices=$(docker inspect --format '{{ .HostConfig.Devices }}' ${container_name})
+    local devices=$(docker inspect -f '{{ .HostConfig.Devices }}' ${container_name})
     if [[ $devices != "[]" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -899,7 +913,7 @@ check_item_055() {
 check_item_056() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local uts_mode=$(docker inspect --format '{{ .HostConfig.UTSMode }}' ${container_name})
+    local uts_mode=$(docker inspect -f '{{ .HostConfig.UTSMode }}' ${container_name})
     if [[ $uts_mode == "host" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -911,7 +925,7 @@ check_item_056() {
 check_item_057() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local security_opt=$(docker inspect --format '{{ .HostConfig.SecurityOpt }}' ${container_name})
+    local security_opt=$(docker inspect -f '{{ .HostConfig.SecurityOpt }}' ${container_name})
     if [[ $security_opt == "[host]" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -923,7 +937,7 @@ check_item_057() {
 check_item_058() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local cgroup=$(docker inspect --format '{{ .HostConfig.CgroupParent }}' ${container_name})
+    local cgroup=$(docker inspect -f '{{ .HostConfig.CgroupParent }}' ${container_name})
     if [[ $cgroup != "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -935,7 +949,7 @@ check_item_058() {
 check_item_059() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local security_opt=$(docker inspect --format '{{ .HostConfig.SecurityOpt }}' ${container_name})
+    local security_opt=$(docker inspect -f '{{ .HostConfig.SecurityOpt }}' ${container_name})
     if [[ $security_opt != "[no-new-privileges]" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -947,7 +961,7 @@ check_item_059() {
 check_item_060() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local health_check=$(docker inspect --format '{{ .State.Health.Status }}' ${container_name})
+    local health_check=$(docker inspect -f '{{ .State.Health.Status }}' ${container_name})
     if [[ $health_check == "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -959,7 +973,7 @@ check_item_060() {
 check_item_061() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local pids_limit=$(docker inspect --format '{{ .HostConfig.PidsLimit }}' ${container_name})
+    local pids_limit=$(docker inspect -f '{{ .HostConfig.PidsLimit }}' ${container_name})
     if [[ $pids_limit == "0" || $pids_limit == "-1" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -971,7 +985,7 @@ check_item_061() {
 check_item_062() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local user_ns_mode=$(docker inspect --format '{{ .HostConfig.UsernsMode }}' ${container_name})
+    local user_ns_mode=$(docker inspect -f '{{ .HostConfig.UsernsMode }}' ${container_name})
     if [[ $user_ns_mode == "host" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -983,7 +997,7 @@ check_item_062() {
 check_item_063() {
     num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item="Item_$num"
-    local sock_mount=$(docker inspect --format 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock)
+    local sock_mount=$(docker inspect -f 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock)
     if [[ $sock_mount != "" ]]; then
         _failed "[$item] ${check_items[$item]}"
     else
@@ -992,67 +1006,66 @@ check_item_063() {
 }
 
 
-check_item_001
-check_item_002
-check_item_003
-check_item_004
-check_item_005
-check_item_006
-check_item_007
-check_item_008
-check_item_009
-check_item_010
-check_item_011
-check_item_012
-check_item_013
-check_item_014
-check_item_015
-check_item_016
-check_item_017
-check_item_018
-check_item_019
-check_item_020
-check_item_021
-check_item_021
-check_item_022
-check_item_023
-check_item_024
-check_item_025
-check_item_026
-check_item_027
-check_item_028
-check_item_029
-check_item_030
-check_item_031
-check_item_032
-check_item_033
-check_item_034
-check_item_035
-check_item_036
-check_item_037
-check_item_038
-check_item_039
-check_item_040
-check_item_041
-check_item_042
-check_item_043
-check_item_044
-check_item_045
-check_item_046
-check_item_047
-check_item_048
-check_item_049
-check_item_050
-check_item_051
-check_item_052
-check_item_053
-check_item_054
-check_item_055
-check_item_056
-check_item_057
-check_item_058
-check_item_059
-check_item_060
-check_item_061
-check_item_062
+check_item_001 && \
+check_item_002 && \
+check_item_003 && \
+check_item_004 && \
+check_item_005 && \
+check_item_006 && \
+check_item_007 && \
+check_item_008 && \
+check_item_009 && \
+check_item_010 && \
+check_item_011 && \
+check_item_012 && \
+check_item_013 && \
+check_item_014 && \
+check_item_015 && \
+check_item_016 && \
+check_item_017 && \
+check_item_018 && \
+check_item_019 && \
+check_item_020 && \
+check_item_021 && \
+check_item_022 && \
+check_item_023 && \
+check_item_024 && \
+check_item_025 && \
+check_item_026 && \
+check_item_027 && \
+check_item_028 && \
+check_item_029 && \
+check_item_030 && \
+check_item_031 && \
+check_item_032 && \
+check_item_033 && \
+check_item_034 && \
+check_item_035 && \
+check_item_036 && \
+check_item_037 && \
+check_item_038 && \
+check_item_039 && \
+check_item_040 && \
+check_item_041 && \
+check_item_042 && \
+check_item_043 && \
+check_item_044 && \
+check_item_045 && \
+check_item_046 && \
+check_item_047 && \
+check_item_048 && \
+check_item_049 && \
+check_item_050 && \
+check_item_051 && \
+check_item_052 && \
+check_item_053 && \
+check_item_054 && \
+check_item_055 && \
+check_item_056 && \
+check_item_057 && \
+check_item_058 && \
+check_item_059 && \
+check_item_060 && \
+check_item_061 && \
+check_item_062 && \
 check_item_063

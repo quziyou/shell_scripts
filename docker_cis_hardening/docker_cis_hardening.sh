@@ -27,14 +27,16 @@ container_name="arms_db"
 container_user="mongodb"
 container_memory="4G"
 container_cpu=512
-local_dir="/data/mongodb/"
+local_dir="/data/arms_mongo/"
 internal_dir="/data/db/"
-config_file=${internal_dir}mongoconf.yml
+local_back="/data/arms_backup/"
+internal_back="/data/mongo_backup/"
+config_file=${internal_dir}mongo_conf.yml
 docker_audit_file="/etc/audit/rules.d/docker_hardening.rules"
 report_file_name="${cur_dir}/Docker_CIS_Hardening_Report.txt"
 service_file=$(systemctl show -p FragmentPath docker.service |cut -d "=" -f2)
 socket_file=$(systemctl show -p FragmentPath docker.socket  |cut -d "=" -f2)
-setting_row=$(grep -n "ExecStart=/usr/bin/dockerd-current" ${file} |cut -d ":" -f1)
+setting_row=$(grep -n "ExecStart=/usr/bin/dockerd-current" ${service_file} |cut -d ":" -f1)
 valid_docker_group_users=(
 "root"
 "sa_arms"
@@ -131,14 +133,25 @@ exit 1
 
 # Ensure Container of MongoDB is running
 # ==================================================================================================================
-[[ $(docker ps --format "table {{.Names}}" |grep -w ${container_name}) == "" ]] && \
+[[ $(docker ps --format "{{.Names}}" |grep -w ${container_name}) == "" ]] && \
 printf '\033[1;31;31m%b\033[0m' "MongoDB Container must be running when you run this script.\n" && \
 exit 1
 
 
-# Ensure the Docker Deamon is running
+# Back up the service file
 # ==================================================================================================================
-cp ${service_file} "${service_file}/docker.service.bak"
+service_bak="${service_file}.bak"
+if [[ ! -f $service_bak ]]; then
+    cp ${service_file} ${service_bak}
+fi
+
+
+# Set up Selinux
+# ==================================================================================================================
+chcon -Rt svirt_sandbox_file_t ${local_dir}
+chcon -Rt svirt_sandbox_file_t ${local_dir}/log/
+chcon -Rt svirt_sandbox_file_t ${local_back}
+
 
 
 # Basic utility functions
@@ -309,6 +322,8 @@ harden_item_003() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /usr/bin/docker -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /usr/bin/docker" | tee -a $report_file_name
     fi
@@ -327,6 +342,8 @@ harden_item_004() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /var/lib/docker -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /var/lib/docker" | tee -a $report_file_name
     fi
@@ -345,6 +362,8 @@ harden_item_005() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /etc/docker -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /etc/docker" | tee -a $report_file_name
     fi
@@ -363,6 +382,8 @@ harden_item_006() {
     if [[ $? -ne 0 ]]; then
     	local file=$(systemctl show -p FragmentPath docker.service |cut -d "=" -f2)
         _error_detect "echo '-w ${file} -k docker' >> ${docker_audit_file}" | tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep docker.service" | tee -a $report_file_name
     fi
@@ -377,14 +398,19 @@ harden_item_007() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    socket_dir=$(dirname ${service_file})
-    [[ ! -f ${socket_file} ]] && cp ./docker.socket ${socket_dir} \
-    systemctl unmask docker.service && systemctl unmask docker.socket && systemctl restart docker
-    socket_file=$(systemctl show -p FragmentPath docker.socket  |cut -d "=" -f2)
+    if [[ ! -f ${socket_file} ]]; then
+        socket_dir=$(dirname ${service_file})
+        cp ./docker.socket ${socket_dir} 
+        systemctl unmask docker.service && systemctl unmask docker.socket
+        docker stop ${container_name} && systemctl restart docker && docker start ${container_name}
+        socket_file=$(systemctl show -p FragmentPath docker.socket  |cut -d "=" -f2)
+    fi
     auditctl -l | grep docker.sock > /dev/null 2>&1
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w ${socket_file} -p rwxa -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep docker.sock" | tee -a $report_file_name
     fi
@@ -403,6 +429,8 @@ harden_item_008() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /etc/default/docker -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /etc/default/docker" | tee -a $report_file_name
     fi
@@ -421,6 +449,8 @@ harden_item_009() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /etc/docker/daemon.json -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /etc/docker/daemon.json" | tee -a $report_file_name
     fi
@@ -439,6 +469,8 @@ harden_item_010() {
     if [[ $? -ne 0 ]]; then
         _error_detect "echo '-w /usr/bin/docker-containerd -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
+        _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /usr/bin/docker-containerd" | tee -a $report_file_name
     fi
@@ -458,6 +490,7 @@ harden_item_011() {
         _error_detect "echo '-w /usr/bin/docker-runc -k docker' >> ${docker_audit_file}" | \
         tee -a $report_file_name
         _error_detect "service auditd restart" | tee -a $report_file_name
+        sleep 15
     else
     	_error_detect "auditctl -l | grep /usr/bin/docker-runc" | tee -a $report_file_name
     fi
@@ -473,15 +506,18 @@ harden_item_012() {
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
     local cmd=""
-    icc=$(docker network ls --quiet | xargs xargs docker network inspect --format \
+    icc=$(docker network ls --quiet | xargs xargs docker network inspect -f \
     '{{ .Name }}: {{ .Options }}' | sed 's/ /\n/g'| grep 'com.docker.network.bridge.enable_icc:' | \
     cut -d ':' -f 2)
     if [[ $icc == "true" ]]; then
     	local content="--icc=false \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}" | tee -a $report_file_name
-        systemctl daemon-reload
-        systemctl restart docker
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'icc'"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -503,6 +539,11 @@ harden_item_013() {
     	local content="--log-level=info \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'log-level'"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -523,6 +564,11 @@ harden_item_014() {
     if [[ $is_allow == "false" ]]; then
     	local cmd="sed -i '/--iptables=/d' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'iptables='"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -543,6 +589,11 @@ harden_item_015() {
     if [[ $insecure_registry != "" ]]; then
     	local cmd="sed -i '/insecure-registry=/d' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'insecure-registry='"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -564,6 +615,11 @@ harden_item_016() {
     	local content="--storage-driver overlay2 \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd='docker info |grep "Storage Driver" |cut -d ":" -f2 |sed "s/ //"'
         _info "${cmd}\n" | tee -a $report_file_name
@@ -580,11 +636,16 @@ harden_item_017() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    default_ulimit=$(docker info |grep "default-ulimit")
+    default_ulimit=$(ps -ef | grep dockerd |grep "default-ulimit ")
     if [[ $default_ulimit == "" ]]; then
     	local content="--default-ulimit nproc=1024:2408 --default-ulimit nofile=100:200 \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd='docker info |grep "Storage Driver" |cut -d ":" -f2 |sed "s/ //"'
         _info "${cmd}\n" | tee -a $report_file_name
@@ -601,8 +662,8 @@ harden_item_018() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    security_options=$(docker info --format '{{ .SecurityOptions }}')
-    local cmd="docker info --format '{{ .SecurityOptions }}'"
+    security_options=$(docker info -f '{{ .SecurityOptions }}')
+    local cmd="docker info -f '{{ .SecurityOptions }}'"
     _info "${cmd}\n" | tee -a $report_file_name
     _info "Keep the default setting."
     _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -621,6 +682,11 @@ harden_item_019() {
     if [[ $cgroup_parent != "" ]]; then
     	local cmd="sed -i '/cgroup-parent=/d' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd='ps -ef | grep dockerd |grep "cgroup-parent"'
         _info "${cmd}\n" | tee -a $report_file_name
@@ -641,6 +707,11 @@ harden_item_020() {
     if [[ $storage_opt != "" ]]; then
     	local cmd="sed -i 's/\-\-storage-opt dm.basesize=..G //' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd='ps -ef | grep dockerd |grep "storage-opt"'
         _info "${cmd}\n" | tee -a $report_file_name
@@ -672,8 +743,8 @@ harden_item_022() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    log_driver=$(docker info --format '{{ .LoggingDriver }}')
-    local cmd="docker info --format '{{ .LoggingDriver }}'"
+    log_driver=$(docker info -f '{{ .LoggingDriver }}')
+    local cmd="docker info -f '{{ .LoggingDriver }}'"
     _info "${cmd}\n" | tee -a $report_file_name
     _info "Logging Driver will be set up by Containers."
     _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -693,6 +764,11 @@ harden_item_023() {
     	local content="--disable-legacy-registry \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd='ps -ef | grep dockerd | grep "disable-legacy-registry"'
         _info "${cmd}\n" | tee -a $report_file_name
@@ -709,13 +785,18 @@ harden_item_024() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    live_restore=$(docker info --format '{{ .LiveRestoreEnabled }}')
+    live_restore=$(docker info -f '{{ .LiveRestoreEnabled }}')
     if [[ $live_restore != "true" ]]; then
     	local content="--live-restore \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${setting_row}"
+    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
-        local cmd="docker info --format '{{ .LiveRestoreEnabled }}'"
+        local cmd="docker info -f '{{ .LiveRestoreEnabled }}'"
         _info "${cmd}\n" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
     fi
@@ -755,6 +836,11 @@ harden_item_026() {
     	local content="--userland-proxy=false \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'userland-proxy=' |cut -d '=' -f2"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -776,6 +862,11 @@ harden_item_027() {
     	local content="--seccomp-profile=/etc/docker/seccomp.json \\\\"
     	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
         local cmd="ps -ef | grep dockerd |sed 's/ /\n/g' |grep  'seccomp-profile=' |cut -d '=' -f2"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -792,13 +883,18 @@ harden_item_028() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    experimental=$(docker version --format '{{ .Server.Experimental }}')
+    experimental=$(docker version -f '{{ .Server.Experimental }}')
     if [[ $experimental != "false" ]]; then
     	local content="--seccomp-profile=/etc/docker/seccomp.json \\\\"
     	local cmd="sed -i '/--experimental/d' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
+        _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
+        _error_detect "systemctl daemon-reload" | tee -a $report_file_name
+        sleep 15
+        _error_detect "systemctl restart docker"  | tee -a $report_file_name
+        _error_detect "docker start '${container_name}'" | tee -a $report_file_name
     else
-        local cmd="docker version --format '{{ .Server.Experimental }}'"
+        local cmd="docker version -f '{{ .Server.Experimental }}'"
         _info "${cmd}\n" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
     fi
@@ -890,7 +986,7 @@ harden_item_033() {
     local num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item_num="Item_$num"
     local task_name=${check_items[$item_num]}
-    local docker_dir="etc/docker"
+    local docker_dir="/etc/docker"
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
@@ -911,7 +1007,7 @@ harden_item_034() {
     local num=$(echo ${FUNCNAME[@]} | cut -d" " -f1 | cut -d"_" -f3)
     local item_num="Item_$num"
     local task_name=${check_items[$item_num]}
-    local docker_dir="etc/docker"
+    local docker_dir="/etc/docker"
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
@@ -957,7 +1053,7 @@ harden_item_036() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local cmd="find ${certs_dir} -mindepth 1 -type d |xargs -i find {} -type f |xargs chmod 444"
+    local cmd="find ${certs_dir} -mindepth 1 -type d |xargs -i find {} -type f |xargs -i chmod 444 {}"
     _error_detect "${cmd}"  | tee -a $report_file_name
     printf "\n\n"
 }
@@ -1098,19 +1194,18 @@ harden_item_043() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local container_info=$(docker inspect --format '{{ .Id }}:{{ .Config.User }}' ${container_name})
-    local container_user=$(echo ${container_info} |cut -d ":" -f2)
-    if [[ $container_user == "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    local user=$(docker inspect -f '{{ .Config.User }}' ${container_name})
+    if [[ $user == "" ]]; then
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
         _error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}:{{ .Config.User }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .Id }}:{{ .Config.User }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Container Info: ${container_info}\n" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1129,7 +1224,7 @@ harden_item_044() {
     local content_trust=$(echo $DOCKER_CONTENT_TRUST)
     if [[ $content_trust -ne 1 ]]; then
     	local cmd="echo export DOCKER_CONTENT_TRUST=1 >> /etc/profile && source /etc/profile" 
-        _error_detect "${cmd2}"  | tee -a $report_file_name
+        _error_detect "${cmd}"  | tee -a $report_file_name
     else
         local cmd="echo $DOCKER_CONTENT_TRUST"
         _info "${cmd}\n" | tee -a $report_file_name
@@ -1147,19 +1242,18 @@ harden_item_045() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local privileged_info=$(docker inspect --format '{{ .Id }}: Privileged={{ .HostConfig.Privileged }}' ${container_name})
-    local check_res=$(echo ${privileged_info |awk -F'=' '{print $NF}'})
+    local check_res=$(docker inspect -f '{{ .HostConfig.Privileged }}' ${container_name})
     if [[ $check_res != "false" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Privileged={{ .HostConfig.Privileged }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.Privileged }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Privileged Info: ${check_res}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1175,8 +1269,7 @@ harden_item_046() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local pind_info=$(docker inspect --format '{{ .Id }}: Volumes={{ .Mounts }}' ${container_name})
-    local pinds=$(echo ${pind_info} |sed  's/ /\n/g' |xargs -i echo {} |grep "Source:" |cut -d ":" -f2)
+    local pinds=$(docker inspect --format '{{range .HostConfig.Binds}}{{println .}}{{end}}' $container_name |cut -d ':' -f1)
     local check_num=0
     local invalid_dirs=""
     for dir in ${pinds[@]}; do
@@ -1188,16 +1281,16 @@ harden_item_046() {
         done
     done
     if [[ $invalid_dirs != "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Volumes={{ .Mounts }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .Id }}: Volumes={{ .Mounts }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "${pind_info}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1213,20 +1306,26 @@ harden_item_047() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local port=$(docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{4,5}" |cut -d ':' -f2)
-    if [[ $port -lt 1024 ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    local ports=$(docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{1,5}" |cut -d ':' -f2)
+    check_num=0
+    for port in ${ports[@]}; do
+        if [[ $port -lt 1024 ]]; then
+            check_num=$((($check_num +1 )))
+        fi
+    done
+    if [[ $check_num -ne 0 ]]; then
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{4,5}" |cut -d ':' -f2"
+        local cmd="docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostPort:[0-9]{1,5}" |cut -d ':' -f2"
         _info "${cmd}\n" | tee -a $report_file_name
-        _info "Port: ${port}" | tee -a $report_file_name
+        _info "Port: ${ports}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
     fi
     printf "\n\n"
@@ -1240,18 +1339,18 @@ harden_item_048() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local net=$(docker inspect --format '{{ .Id }}: NetworkMode={{ .HostConfig.NetworkMode }}' ${container_name} |cut -d '=' -f2)
+    local net=$(docker inspect -f '{{.HostConfig.NetworkMode}}' ${container_name})
     if [[ $net == "host" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Privileged={{ .HostConfig.Privileged }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.NetworkMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Network Mode: ${net}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1267,18 +1366,18 @@ harden_item_049() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local mem=$(docker inspect --format '{{ .Id }}: Memory={{ .HostConfig.Memory }}' ${container_name} |cut -d '=' -f2)
+    local mem=$(docker inspect -f '{{ .HostConfig.Memory }}' ${container_name})
     if [[ $mem == "0" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Memory={{ .HostConfig.Memory }}' ${container_name} |cut -d '='' -f2"
+        local cmd="docker inspect -f '{{ .HostConfig.Memory }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Memory: ${mem}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1294,18 +1393,18 @@ harden_item_050() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local cpu_share=$(docker inspect --format '{{ .Id }}: CpuShares={{ .HostConfig.CpuShares }}' ${container_name} |cut -d '=' -f2)
-    if [[ $cpu_share == "0" || $cpu_share== "1024" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    local cpu_share=$(docker inspect -f '{{.HostConfig.CpuShares}}' ${container_name})
+    if [[ $cpu_share == "0" || $cpu_share == "1024" ]]; then
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: CpuShares={{ .HostConfig.CpuShares }}' ${container_name} |cut -d '=' -f2"
+        local cmd="docker inspect -f '{{ .HostConfig.CpuShares }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "CPU Shares: ${cpu_share}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1321,18 +1420,18 @@ harden_item_051() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local host_ip=$(docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2)
+    local host_ip=$(docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2)
     if [[ $host_ip == "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2"
+        local cmd="docker inspect -f '{{ .Id }}: Ports={{ .NetworkSettings.Ports }}' ${container_name} |grep -Eo "HostIp:[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" |cut -d ':' -f2"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Host IP: ${host_ip}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1348,20 +1447,20 @@ harden_item_052() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local restart_policy_name=$(docker inspect --format '{{ .HostConfig.RestartPolicy.Name }}' ${container_name})
-    local restart_max_count=$(docker inspect --format '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name})
+    local restart_policy_name=$(docker inspect -f '{{ .HostConfig.RestartPolicy.Name }}' ${container_name})
+    local restart_max_count=$(docker inspect -f '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name})
     if [[ $restart_policy_name != "on-failure" || $restart_max_count -ne 5 ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-    	local cmd1="docker inspect --format '{{ .HostConfig.RestartPolicy.Name }}' ${container_name}"
-        local cmd2="docker inspect --format '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name}"
+    	local cmd1="docker inspect -f '{{ .HostConfig.RestartPolicy.Name }}' ${container_name}"
+        local cmd2="docker inspect -f '{{ .HostConfig.RestartPolicy.MaximumRetryCount }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Restart Policy Name: ${restart_policy_name}  Maximum Retry Count: ${restart_max_count}" | tee -a $report_file_name
@@ -1378,18 +1477,18 @@ harden_item_053() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local pid_mode=$(docker inspect --format '{{ .HostConfig.PidMode }}' ${container_name})
+    local pid_mode=$(docker inspect -f '{{ .HostConfig.PidMode }}' ${container_name})
     if [[ $pid_mode == "host" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.PidMode }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.PidMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Pid Mode: ${pid_mode}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1405,18 +1504,18 @@ harden_item_054() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local ipc_mod=$(docker inspect --format '{{ .HostConfig.IpcMode  }}' ${container_name})
+    local ipc_mod=$(docker inspect -f '{{ .HostConfig.IpcMode  }}' ${container_name})
     if [[ $ipc_mod == "host" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.PidMode }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.PidMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "IPC Mode: ${ipc_mod}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1432,18 +1531,18 @@ harden_item_055() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local devices=$(docker inspect --format '{{ .HostConfig.Devices }}' ${container_name})
+    local devices=$(docker inspect -f '{{ .HostConfig.Devices }}' ${container_name})
     if [[ $devices != "[]" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.PidMode }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.PidMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Devices: ${devices}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1459,18 +1558,18 @@ harden_item_056() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local uts_mode=$(docker inspect --format '{{ .HostConfig.UTSMode }}' ${container_name})
+    local uts_mode=$(docker inspect -f '{{ .HostConfig.UTSMode }}' ${container_name})
     if [[ $uts_mode == "host" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.UTSMode }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.UTSMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "UTS Mode: ${uts_mode}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1486,18 +1585,18 @@ harden_item_057() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local security_opt=$(docker inspect --format '{{ .Id }}: SecurityOpt={{ .HostConfig.SecurityOpt }}' ${container_name} |cut -d '=' -f2)
+    local security_opt=$(docker inspect -f '{{ .Id }}: SecurityOpt={{ .HostConfig.SecurityOpt }}' ${container_name} |cut -d '=' -f2)
     if [[ $security_opt == "[host]" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .Id }}: SecurityOpt={{ .HostConfig.SecurityOpt }}' ${container_name} |cut -d '='' -f2"
+        local cmd="docker inspect -f '{{ .Id }}: SecurityOpt={{ .HostConfig.SecurityOpt }}' ${container_name} |cut -d '='' -f2"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Security Opt: ${security_opt}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1513,18 +1612,18 @@ harden_item_058() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local cgroup=$(docker inspect --format '{{ .HostConfig.CgroupParent }}' ${container_name})
+    local cgroup=$(docker inspect -f '{{ .HostConfig.CgroupParent }}' ${container_name})
     if [[ $cgroup != "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.CgroupParent }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.CgroupParent }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Cgroup Parent: ${cgroup}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1540,18 +1639,18 @@ harden_item_059() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local security_opt=$(docker inspect --format '{{ .HostConfig.SecurityOpt }}' ${container_name})
+    local security_opt=$(docker inspect -f '{{ .HostConfig.SecurityOpt }}' ${container_name})
     if [[ $security_opt != "[no-new-privileges]" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.SecurityOpt }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.SecurityOpt }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Security Opt: ${security_opt}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1567,18 +1666,18 @@ harden_item_060() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local health_check=$(docker inspect --format '{{ .State.Health.Status }}' ${container_name})
+    local health_check=$(docker inspect -f '{{ .State.Health.Status }}' ${container_name})
     if [[ $health_check == "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .State.Health.Status }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .State.Health.Status }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Health Status: ${health_check}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1594,18 +1693,18 @@ harden_item_061() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local pids_limit=$(docker inspect --format '{{ .HostConfig.PidsLimit }}' ${container_name})
+    local pids_limit=$(docker inspect -f '{{ .HostConfig.PidsLimit }}' ${container_name})
     if [[ $pids_limit == "0" || $pids_limit == "-1" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.PidsLimit }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.PidsLimit }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "PIDs Limit: ${pids_limit}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1621,18 +1720,18 @@ harden_item_062() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local user_ns_mode=$(docker inspect --format '{{ .HostConfig.UsernsMode }}' ${container_name})
+    local user_ns_mode=$(docker inspect -f '{{ .HostConfig.UsernsMode }}' ${container_name})
     if [[ $user_ns_mode == "host" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format '{{ .HostConfig.UsernsMode }}' ${container_name}"
+        local cmd="docker inspect -f '{{ .HostConfig.UsernsMode }}' ${container_name}"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "User Name Space Mode: ${user_ns_mode}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1648,18 +1747,18 @@ harden_item_063() {
     echo $(_green "Doing   ${item_num}    ${task_name}..")
     echo "${split_line}"
     report_writer "${item_num}" "${task_name}"
-    local sock_mount=$(docker inspect --format 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock)
+    local sock_mount=$(docker inspect -f 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock)
     if [[ $sock_mount != "" ]]; then
-    	local image_id=$(docker inspect --format '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
+    	local image_id=$(docker inspect -f '{{ .Image }}' ${container_name} |awk -F':' '{print $NF}')
     	local cmd1="docker stop ${container_name} && docker rm -f ${container_name}"
     	local cmd2="docker run -dit -u ${container_user} -v ${local_dir}:${internal_dir} -p ${host_ip}:${local_port}:${internal_port} 
     	            --detach --restart=on-failure:5 --name ${container_name} -m ${container_memory} --cpu-shares ${container_cpu} 
     	            --security-opt=no-new-privileges --health-cmd='ps aux |grep -w abc |grep -v grep || echo 1' 
-    	            --pids-limit 100 ${image_id} --config ${internal_dir}${config_file}"
+    	            -v ${local_back}:${internal_back} --pids-limit 100 ${image_id} --config ${config_file}"
     	_error_detect "${cmd1}"  | tee -a $report_file_name
         _error_detect "${cmd2}"  | tee -a $report_file_name
     else
-        local cmd="docker inspect --format 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock"
+        local cmd="docker inspect -f 'Volumes={{ .Mounts }}' ${container_name} | grep docker.sock"
         _info "${cmd}\n" | tee -a $report_file_name
         _info "Sock File Mount: ${sock_mount}" | tee -a $report_file_name
         _green "Execution command (${cmd}) sucessful.\n" | tee -a $report_file_name
@@ -1669,67 +1768,66 @@ harden_item_063() {
 
 
 
-harden_item_001
-harden_item_002
-harden_item_003
-harden_item_004
-harden_item_005
-harden_item_006
-harden_item_007
-harden_item_008
-harden_item_009
-harden_item_010
-harden_item_011
-harden_item_012
-harden_item_013
-harden_item_014
-harden_item_015
-harden_item_016
-harden_item_017
-harden_item_018
-harden_item_019
-harden_item_020
-harden_item_021
-harden_item_021
-harden_item_022
-harden_item_023
-harden_item_024
-harden_item_025
-harden_item_026
-harden_item_027
-harden_item_028
-harden_item_029
-harden_item_030
-harden_item_031
-harden_item_032
-harden_item_033
-harden_item_034
-harden_item_035
-harden_item_036
-harden_item_037
-harden_item_038
-harden_item_039
-harden_item_040
-harden_item_041
-harden_item_042
-harden_item_043
-harden_item_044
-harden_item_045
-harden_item_046
-harden_item_047
-harden_item_048
-harden_item_049
-harden_item_050
-harden_item_051
-harden_item_052
-harden_item_053
-harden_item_054
-harden_item_055
-harden_item_056
-harden_item_057
-harden_item_058
-harden_item_059
-harden_item_060
-harden_item_061
-harden_item_062
+harden_item_001 && \
+harden_item_002 && \
+harden_item_003 && \
+harden_item_004 && \
+harden_item_005 && \
+harden_item_006 && \
+harden_item_007 && \
+harden_item_008 && \
+harden_item_009 && \
+harden_item_010 && \
+harden_item_011 && \
+harden_item_012 && \
+harden_item_013 && \
+harden_item_014 && \
+harden_item_015 && \
+harden_item_016 && \
+harden_item_017 && \
+harden_item_018 && \
+harden_item_019 && \
+harden_item_020 && \
+harden_item_021 && \
+harden_item_022 && \
+harden_item_023 && \
+harden_item_024 && \
+harden_item_025 && \
+harden_item_026 && \
+harden_item_027 && \
+harden_item_028 && \
+harden_item_029 && \
+harden_item_030 && \
+harden_item_031 && \
+harden_item_032 && \
+harden_item_033 && \
+harden_item_034 && \
+harden_item_035 && \
+harden_item_036 && \
+harden_item_037 && \
+harden_item_038 && \
+harden_item_039 && \
+harden_item_040 && \
+harden_item_041 && \
+harden_item_042 && \
+harden_item_043 && \
+harden_item_044 && \
+harden_item_045 && \
+harden_item_046 && \
+harden_item_047 && \
+harden_item_048 && \
+harden_item_049 && \
+harden_item_050 && \
+harden_item_051 && \
+harden_item_052 && \
+harden_item_053 && \
+harden_item_054 && \
+harden_item_055 && \
+harden_item_056 && \
+harden_item_057 && \
+harden_item_058 && \
+harden_item_059 && \
+harden_item_060 && \
+harden_item_061 && \
+harden_item_062 && \
 harden_item_063
