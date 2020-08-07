@@ -37,6 +37,7 @@ report_file_name="${cur_dir}/Docker_CIS_Hardening_Report.txt"
 service_file=$(systemctl show -p FragmentPath docker.service |cut -d "=" -f2)
 socket_file=$(systemctl show -p FragmentPath docker.socket  |cut -d "=" -f2)
 setting_row=$(grep -n "ExecStart=/usr/bin/dockerd-current" ${service_file} |cut -d ":" -f1)
+[[ $((($setting_row%2))) -eq 1]] && setting_row=$((($setting_row+1)))
 valid_docker_group_users=(
 "root"
 "sa_arms"
@@ -140,10 +141,8 @@ exit 1
 
 # Back up the service file
 # ==================================================================================================================
-service_bak="${service_file}.bak"
-if [[ ! -f $service_bak ]]; then
-    cp ${service_file} ${service_bak}
-fi
+service_bak="${service_file}.bak_$(date +%H%M%S)"
+cp ${service_file} ${service_bak}
 
 
 # Set up Selinux
@@ -510,8 +509,8 @@ harden_item_012() {
     '{{ .Name }}: {{ .Options }}' | sed 's/ /\n/g'| grep 'com.docker.network.bridge.enable_icc:' | \
     cut -d ':' -f 2)
     if [[ $icc == "true" ]]; then
-    	local content="--icc=false \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --icc=false \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}" | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -536,8 +535,8 @@ harden_item_013() {
     report_writer "${item_num}" "${task_name}"
     log_leve=$(ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'log-level' |cut -d '=' -f2)
     if [[ $log_leve != "info" ]]; then
-    	local content="--log-level=info \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --log-level=info \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -612,8 +611,8 @@ harden_item_016() {
     report_writer "${item_num}" "${task_name}"
     storage_driver=$(docker info |grep "Storage Driver" |cut -d ':' -f2 |sed 's/ //')
     if [[ $storage_driver == "aufs" ]]; then
-    	local content="--storage-driver overlay2 \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --storage-driver overlay2 \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -638,8 +637,8 @@ harden_item_017() {
     report_writer "${item_num}" "${task_name}"
     default_ulimit=$(ps -ef | grep dockerd |grep "default-ulimit ")
     if [[ $default_ulimit == "" ]]; then
-    	local content="--default-ulimit nproc=1024:2408 --default-ulimit nofile=100:200 \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --default-ulimit nproc=1024:2408 --default-ulimit nofile=100:200 \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -761,8 +760,8 @@ harden_item_023() {
     report_writer "${item_num}" "${task_name}"
     disable_legacy_registry=$(ps -ef | grep dockerd | grep "disable-legacy-registry")
     if [[ $disable_legacy_registry == "" ]]; then
-    	local content="--disable-legacy-registry \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --disable-legacy-registry \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -787,8 +786,8 @@ harden_item_024() {
     report_writer "${item_num}" "${task_name}"
     live_restore=$(docker info -f '{{ .LiveRestoreEnabled }}')
     if [[ $live_restore != "true" ]]; then
-    	local content="--live-restore \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --live-restore \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -833,8 +832,8 @@ harden_item_026() {
     report_writer "${item_num}" "${task_name}"
     userland_proxy=$(ps -ef | grep dockerd |sed 's/ /\n/g' |grep 'userland-proxy=' |cut -d '=' -f2)
     if [[ $userland_proxy != "false" ]]; then
-    	local content="--userland-proxy=false \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --userland-proxy=false \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -859,8 +858,8 @@ harden_item_027() {
     report_writer "${item_num}" "${task_name}"
     seccomp_profile=$(ps -ef | grep dockerd |sed 's/ /\n/g' |grep  'seccomp-profile=' |cut -d '=' -f2)
     if [[ $seccomp_profile == "" ]]; then
-    	local content="--seccomp-profile=/etc/docker/seccomp.json \\\\"
-    	local cmd="sed -i 'N;${setting_row}a${content}' ${service_file}"
+    	local content="\t\ \ --seccomp-profile=/etc/docker/seccomp.json \\\\"
+    	local cmd="sed -i 'N;${setting_row}a\\${content}' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name
         _error_detect "systemctl daemon-reload" | tee -a $report_file_name
@@ -885,7 +884,6 @@ harden_item_028() {
     report_writer "${item_num}" "${task_name}"
     experimental=$(docker version -f '{{ .Server.Experimental }}')
     if [[ $experimental != "false" ]]; then
-    	local content="--seccomp-profile=/etc/docker/seccomp.json \\\\"
     	local cmd="sed -i '/--experimental/d' ${service_file}"
         _error_detect "${cmd}"  | tee -a $report_file_name
         _error_detect "docker stop '${container_name}'" | tee -a $report_file_name

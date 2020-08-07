@@ -1,0 +1,29 @@
+storage:
+  dbPath: /data/db
+  journal:
+    enabled: true
+  engine: wiredTiger
+  wiredTiger:
+    engineConfig:
+      cacheSizeGB: 2
+
+systemLog:
+  logAppend: true
+  logRotate: reopen
+  destination: file
+  path: /data/db/log/mongodb.log
+
+net:
+  port: 4978
+  bindIp: 0.0.0.0
+  maxIncomingConnections: 30000
+
+processManagement:
+  pidFilePath: /data/db/mongod.pid
+
+security:
+  authorization: enabled
+  javascriptEnabled: false
+
+setParameter:
+  enableLocalhostAuthBypass: false
